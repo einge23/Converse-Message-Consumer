@@ -172,9 +172,6 @@ func storeMessage(db *sql.DB, message *Message) error {
 		message.ContentType = "text" // Default to text if not specified
 	}
 
-	message.CreatedAt = time.Now().UTC()
-	message.UpdatedAt = &[]time.Time{time.Now().UTC()}[0]
-
 	// Create the message in database
 	query := `
     INSERT INTO messages (message_id, room_id, thread_id, sender_id, content_type, content, metadata, created_at, updated_at, deleted_at)
