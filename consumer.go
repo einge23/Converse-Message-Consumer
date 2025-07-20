@@ -22,17 +22,27 @@ const (
 
 type Metadata map[string]interface{}
 
+type MessageAttachment struct {
+    ID       string  `json:"id"`
+    FileURL  string  `json:"file_url"`
+    FileKey  string  `json:"file_key"`
+    FileType string  `json:"file_type"`
+    FileSize *int    `json:"file_size"`
+    Filename *string `json:"filename"`
+}
+
 type Message struct {
-	MessageID   string     `json:"message_id"`
-	RoomID      *string    `json:"room_id"`
-	ThreadID    *string    `json:"thread_id"`
-	SenderID    *string    `json:"sender_id"`
-	ContentType string     `json:"content_type"`
-	Content     string     `json:"content"`
-	Metadata    *Metadata  `json:"metadata"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   *time.Time `json:"updated_at"`
-	DeletedAt   *time.Time `json:"deleted_at"`
+    MessageID   string              `json:"message_id"`
+    RoomID      *string             `json:"room_id"`
+    ThreadID    *string             `json:"thread_id"`
+    SenderID    *string             `json:"sender_id"`
+    ContentType string              `json:"content_type"`
+    Content     string              `json:"content"`
+    Metadata    *Metadata           `json:"metadata"`
+    Attachments []MessageAttachment `json:"attachments"`
+    CreatedAt   time.Time           `json:"created_at"`
+    UpdatedAt   *time.Time          `json:"updated_at"`
+    DeletedAt   *time.Time          `json:"deleted_at"`
 }
 
 func failOnError(err error, msg string) {
@@ -158,37 +168,62 @@ func storeMessage(db *sql.DB, message *Message) error {
 		return errors.New("message cannot be nil")
 	}
 
-	// Validate that message has either RoomID or ThreadID
 	if message.RoomID == nil && message.ThreadID == nil {
 		return errors.New("message must have either room_id or thread_id")
 	}
 
-	// Validate required fields
-	if message.Content == "" {
-		return errors.New("message content cannot be empty")
-	}
+	if message.Content == "" && message.ContentType == "text" {
+        return errors.New("text messages cannot have empty content")
+    }
 
-	if message.ContentType == "" {
-		message.ContentType = "text" // Default to text if not specified
-	}
+    if (message.ContentType == "image" || message.ContentType == "file") && message.Content == "" && len(message.Attachments) == 0 {
+        return errors.New("image/file messages must have content URL or attachments")
+    }
 
-	// Create the message in database
+	tx, err := db.Begin()
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback()
+
 	query := `
-    INSERT INTO messages (message_id, room_id, thread_id, sender_id, content_type, content, metadata, created_at, updated_at, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        INSERT INTO messages (message_id, room_id, thread_id, sender_id, content_type, content, metadata, created_at, updated_at, deleted_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	_, err := db.Exec(query, 
-		message.MessageID,
-		message.RoomID,
-		message.ThreadID, 
-		message.SenderID,
-		message.ContentType,
-		message.Content,
-		message.Metadata,
-		message.CreatedAt,
-		message.UpdatedAt,
-		message.DeletedAt,
-	)
+    _, err = tx.Exec(query, 
+        message.MessageID,
+        message.RoomID,
+        message.ThreadID, 
+        message.SenderID,
+        message.ContentType,
+        message.Content,
+        message.Metadata,
+        message.CreatedAt,
+        message.UpdatedAt,
+        message.DeletedAt,
+    )
+    if err != nil {
+        return err
+    }
 
-	return err
+    for _, attachment := range message.Attachments {
+        attachmentQuery := `
+            INSERT INTO message_attachments (id, message_id, file_url, file_key, file_type, file_size, filename)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`
+        
+        _, err = tx.Exec(attachmentQuery,
+            attachment.ID,
+            message.MessageID,
+            attachment.FileURL,
+            attachment.FileKey,
+            attachment.FileType,
+            attachment.FileSize,
+            attachment.Filename,
+        )
+        if err != nil {
+            return err
+        }
+    }
+
+    return tx.Commit()
 }
